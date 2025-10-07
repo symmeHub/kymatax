@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kymatax"
+version = "0.1.0"
+description = "Kymatax Python package"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+keywords = ["kymatax"]
+
+[project.urls]
+Homepage = "https://github.com/lcharleux/kymatax"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["kymatax*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-autodoc-typehints>=1.24",
+]
+dev = [
+    "pytest>=7.0",
+    "sphinx>=7.0",
+    "sphinx-autodoc-typehints>=1.24",
+    "sphinx-autobuild>=2021.3.14",
+]
