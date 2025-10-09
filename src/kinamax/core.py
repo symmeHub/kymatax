@@ -8,15 +8,13 @@ from jax import lax, vmap
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5
 from diffrax import PIDController
 from typing import NamedTuple, ClassVar
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 try:
     import cuml
-except:
+except ImportError:
     pass
 from sklearn.cluster import DBSCAN, AgglomerativeClustering
-from jax import jit
-import networkx as nx
 
 
 @dataclass
@@ -114,7 +112,7 @@ class H46Problem(Container):
 
 @register_dataclass
 @dataclass
-class OrbitFinderConfig(Container):
+class AttractorFinderConfig(Container):
     init_time: jax.Array = field(default_factory=lambda: jnp.array(0.0, dtype=float))
     init_time_step: jax.Array = field(
         default_factory=lambda: jnp.array(1.0e-3, dtype=float)
@@ -141,7 +139,7 @@ def convert_subharmonics_flags(subharmonics_flags, final_flags, targetted_subhar
 
 @register_dataclass
 @dataclass
-class OrbitFinderSolution(Container):
+class AttractorFinderSolution(Container):
     """
     Solution of the orbit finder.
     """
@@ -217,7 +215,7 @@ class OrbitFinderSolution(Container):
         return df
 
 
-class OrbitFinder(NamedTuple):
+class AttractorFinder(NamedTuple):
     """
     Container class for finding orbits in a given ODE problem.
     """
@@ -254,11 +252,11 @@ class OrbitFinder(NamedTuple):
         max_subharmonic = self.get_max_subharmonic()
         return self.max_periods // (2 * max_subharmonic)
 
-    def find_orbits(
+    def find_attractors(
         self,
         problem: NamedTuple,
         init_conditions: jax.Array,
-        finder_config: OrbitFinderConfig,
+        finder_config: AttractorFinderConfig,
     ):
         """
         Find orbits for the given problem.
@@ -269,7 +267,7 @@ class OrbitFinder(NamedTuple):
             controller (PIDController): The controller.
             init_conditions (jax.Array): Initial conditions for the system.
             target_frequency (float): Target frequency.
-            finder_config (OrbitFinderConfig): Configuration for finding orbits.
+            finder_config (AttractorFinderConfig): Configuration for finding orbits.
         Returns:
             jax.Array: Found orbits.
         """
@@ -292,7 +290,7 @@ class OrbitFinder(NamedTuple):
                 res,
                 start_time,
                 end_time,
-            ) = OrbitFinder.integrate_and_check_convergence(
+            ) = AttractorFinder.integrate_and_check_convergence(
                 init_conditions=init_conditions,
                 start_time=start_time,
                 end_time=end_time,
@@ -427,7 +425,7 @@ class OrbitFinder(NamedTuple):
 
         attractors = sol.ys
 
-        solution = OrbitFinderSolution(
+        solution = AttractorFinderSolution(
             attractors=attractors,
             detected_subharmonic=detected_subharmonic
             * np.ones(max_subharmonic, dtype=int),
@@ -436,7 +434,7 @@ class OrbitFinder(NamedTuple):
             minimum_residual=min_residual * np.ones(max_subharmonic, dtype=float),
             simulated_periods=simulated_periods * np.ones(max_subharmonic, dtype=int),
             simulated_time=simulated_time * np.ones(max_subharmonic, dtype=float),
-            converged= (final_flag == 1) * np.ones(max_subharmonic, dtype= bool),
+            converged=(final_flag == 1) * np.ones(max_subharmonic, dtype=bool),
             final_flag=final_flag * np.ones(max_subharmonic, dtype=int),
             simulated_iterations=iterations * np.ones(max_subharmonic, dtype=int),
         )
@@ -459,7 +457,7 @@ class OrbitFinder(NamedTuple):
         """
         Calculates the shooting residual for a given subharmonic and at all time steps.
         """
-        calculate_residuals = OrbitFinder.calculate_subharmonic_atomic_residual
+        calculate_residuals = AttractorFinder.calculate_subharmonic_atomic_residual
         offset = residuals_per_period * subharmonic
         args_in = (0.0, offset, X, state_weights)
         out = lax.fori_loop(0, offset, calculate_residuals, args_in)
@@ -488,7 +486,8 @@ class OrbitFinder(NamedTuple):
         term = ODETerm(problem.rhs)
         # Vectorized version of calculate_subharmonic_residual
         batched_calculate_subharmonic_residual = vmap(
-            OrbitFinder.calculate_subharmonic_residual, in_axes=(0, None, None, None)
+            AttractorFinder.calculate_subharmonic_residual,
+            in_axes=(0, None, None, None),
         )
         tg = jnp.arange(steps_number)
         ts = tg * (t1 - t0) / (steps_number - 1) + t0
@@ -552,68 +551,116 @@ def cluster_points(points, weights, distance_threshold=0.01, method="dbscan"):
         return 1, np.zeros(1, dtype=np.int32), centroids
 
 
-def detect_attractors_orbits(simulations, ode_params_labels, attractor_state_vec_labels, state_vec_labels):
+def detect_orbits(
+    problem_class: NamedTuple,
+    simulations: pl.DataFrame,
+    ode_params_labels: list,
+    attractor_state_vec_labels: list,
+    state_vec_labels: list,
+    distance_threshold: float = 0.01,
+    clustering_method: str = "dbscan",
+):
+    """Cluster attractor samples per configuration and map them to orbit IDs.
+
+    Workflow
+    1. Group rows by ODE parameters, detected subharmonic, and target frequency
+       so each configuration is processed independently.
+    2. Cluster the recorded attractor points in the weighted state space to
+       estimate unique attractors for the group.
+    3. Assign globally unique attractor labels and record which simulations
+       share the same attractor tuple (one orbit).
+    4. Return tidy Polars DataFrames for attractors and the simulation->orbit map.
     """
-    Detects attractors and orbits from the simulations data.
-    """
+
+    def canonicalize_cluster_sequence(sequence: np.ndarray) -> tuple[int, ...]:
+        """Rotate a sequence so the smallest label appears first (orbit invariant)."""
+        sequence = np.asarray(sequence, dtype=int)
+        if sequence.size == 0:
+            return tuple()
+        rotation = int(np.argmin(sequence))
+        return tuple(np.roll(sequence, -rotation))
+
     next_attractor_label = 0
     group_labels = ode_params_labels + ["detected_subharmonic", "target_frequency"]
-    attractors = {
-        k: []
-        for k in state_vec_labels
+    attractor_columns = (
+        state_vec_labels
         + ode_params_labels
-        + ["detected_subharmonic", "attractor_label", "orbit_label", "target_frequency"]
-    }
-    sim_attractor_map = {}
-    attractor_sim_map = {}
+        + [
+            "detected_subharmonic",
+            "attractor_label",
+            "orbit_label",
+            "target_frequency",
+        ]
+    )
+    attractors = {col: [] for col in attractor_columns}
+    sim_to_attractor_tuple = {}
+    attractor_tuple_to_sims = defaultdict(list)
 
     for keys, group in simulations.group_by(group_labels):
-        group = group.sort(["sim_label", "attractor_label"])
         params = dict(zip(group_labels, keys))
-        ode_params = {k: params[k] for k in ode_params_labels}
         sh = params["detected_subharmonic"]
-        if sh > 0:
-            points = group.select(attractor_state_vec_labels).to_numpy()
-            problem = H46Problem(**ode_params)
-            weights = problem.state_weights()
-            nclusters, labels, centroids = cluster_points(
-                points, weights, distance_threshold=0.01, method="dbscan"
-            )
-            labels += next_attractor_label
-            attractor_labels = np.arange(nclusters) + next_attractor_label
-            
-            for i in range(nclusters):
-                for k in ode_params_labels:
-                    attractors[k].append(params[k])
-                for j, k in enumerate(state_vec_labels):
-                    attractors[k].append(centroids[i, j])
-                attractors["detected_subharmonic"].append(sh)
-                attractors["attractor_label"].append(attractor_labels[i])
-                attractors["target_frequency"].append(params["target_frequency"])
-            next_attractor_label = next_attractor_label + nclusters
-            for k, v in zip(group["sim_label"][::sh].to_numpy(), labels.reshape(-1,sh)):
-                while v[0] != v.min():
-                    v = np.roll(v, -1)
-                v = tuple(v)
-                sim_attractor_map[k] = v
-                if v not in attractor_sim_map:
-                    attractor_sim_map[v] = []
-                attractor_sim_map[v].append(k)
+        if sh <= 0 or group.height == 0:
+            continue
 
-    orbits_attractors_list = list(attractor_sim_map.keys())
-    orbit_attractor_map = {}
-    attractor_orbit_map = {}
-    for oid in range(len(orbits_attractors_list)):
-        orbit_attractor_map[oid] = orbits_attractors_list[oid]
-    for k, v in orbit_attractor_map.items():
-        for vv in v:
-            attractor_orbit_map[vv] = k
-    for aid in attractors["attractor_label"]:
-        attractors["orbit_label"].append(attractor_orbit_map[aid])  
-    sim_orbit = []
-    for k, v in sim_attractor_map.items():
-        sim_orbit.append((k, attractor_orbit_map[v[0]]))
-    sim_orbit = np.array(sim_orbit)
-    sim_orbit = pl.DataFrame({"sim_label": sim_orbit[:, 0], "orbit_label": sim_orbit[:, 1]})
-    attractors = pl.DataFrame(attractors)
-    return attractors, sim_orbit
+        # Process simulations sharing the same ODE parameters/subharmonics.
+        group = group.sort(["sim_label", "attractor_label"])
+        points = group.select(attractor_state_vec_labels).to_numpy()
+        problem = problem_class(**{k: params[k] for k in ode_params_labels})
+        weights = problem.state_weights()
+        nclusters, labels, centroids = cluster_points(
+            points,
+            weights,
+            distance_threshold=distance_threshold,
+            method=clustering_method,
+        )
+
+        # Offset cluster labels so they stay unique across groups.
+        labels = labels + next_attractor_label
+        attractor_labels = np.arange(nclusters, dtype=int) + next_attractor_label
+
+        for label, centroid in zip(attractor_labels, centroids):
+            for k in ode_params_labels:
+                attractors[k].append(params[k])
+            for value, state_label in zip(centroid, state_vec_labels):
+                attractors[state_label].append(value)
+            attractors["detected_subharmonic"].append(sh)
+            attractors["attractor_label"].append(int(label))
+            attractors["target_frequency"].append(params["target_frequency"])
+
+        next_attractor_label += nclusters
+
+        # Build the attractor sequence followed by each simulation to define orbits.
+        sim_labels = group["sim_label"][::sh].to_numpy()
+        label_sequences = labels.reshape(-1, sh)
+        for sim_label, sequence in zip(sim_labels, label_sequences):
+            canonical = canonicalize_cluster_sequence(sequence)
+            sim_to_attractor_tuple[int(sim_label)] = canonical
+            attractor_tuple_to_sims[canonical].append(int(sim_label))
+
+    # Every unique attractor tuple corresponds to one orbit ID.
+    orbit_attractor_map = {
+        orbit_id: attractor_tuple
+        for orbit_id, attractor_tuple in enumerate(attractor_tuple_to_sims.keys())
+    }
+    orbit_id_lookup = {
+        tuple_: orbit_id for orbit_id, tuple_ in orbit_attractor_map.items()
+    }
+    attractor_to_orbit = {
+        attractor_label: orbit_id
+        for orbit_id, attractor_tuple in orbit_attractor_map.items()
+        for attractor_label in attractor_tuple
+    }
+    attractors["orbit_label"].extend(
+        attractor_to_orbit[aid] for aid in attractors["attractor_label"]
+    )
+
+    sim_orbit_df = pl.DataFrame(
+        {
+            "sim_label": list(sim_to_attractor_tuple.keys()),
+            "orbit_label": [
+                orbit_id_lookup[tuple_] for tuple_ in sim_to_attractor_tuple.values()
+            ],
+        }
+    )
+    attractors_df = pl.DataFrame(attractors)
+    return attractors_df, sim_orbit_df

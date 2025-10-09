@@ -5,8 +5,8 @@ from datetime import datetime
 # Ensure the package can be imported when building docs
 sys.path.insert(0, os.path.abspath("../src"))
 
-project = "kymatax"
-author = "kymatax contributors"
+project = "kinamax"
+author = "kinamax contributors"
 current_year = datetime.now().year
 copyright = f"{current_year}, {author}"
 

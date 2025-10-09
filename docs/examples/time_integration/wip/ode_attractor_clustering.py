@@ -1,7 +1,7 @@
 import jax
 import numpy as np
 import polars as pl
-from kymatax.core import H46Problem, cluster_points
+from kinamax.core import H46Problem, cluster_points
 import os
 
 jax.config.update("jax_platform_name", "cpu")

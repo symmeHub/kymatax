@@ -7,7 +7,7 @@ import polars as pl
 import os
 from diffrax import diffeqsolve, ODETerm, SaveAt, Tsit5, PIDController
 from jax import vmap, jit
-from kymatax.core import Container, cluster_points, AttractorSubharmonicMatcher,  H46Problem
+from kinamax.core import Container, cluster_points, AttractorSubharmonicMatcher,  H46Problem
 from dataclasses import dataclass, field
 from jax.tree_util import register_dataclass
 from typing import NamedTuple
