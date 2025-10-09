@@ -1,7 +1,7 @@
-# kymatax
+# Kinamax
 
 ## Overview
-Kymatax is a JAX/Diffrax powered toolkit for analyzing periodic and subharmonic responses of driven nonlinear ODEs. It includes:
+kinamax is a JAX/Diffrax powered toolkit for analyzing periodic and subharmonic responses of driven nonlinear ODEs. It includes:
 - A reference nonlinear oscillator model (H46) with a forced, damped dynamics.
 - A vectorized orbit-finding routine that integrates the ODE and detects subharmonic periodic orbits via residual-based shooting.
 - Utilities to convert simulation results to Polars DataFrames, cluster attractors, and derive orbit labels.
@@ -22,7 +22,7 @@ Kymatax is a JAX/Diffrax powered toolkit for analyzing periodic and subharmonic 
 
 Install (editable)
 - From the repo root, run: `pip install -e .`
-- To uninstall: `pip uninstall kymatax`
+- To uninstall: `pip uninstall kinamax`
 
 Tests
 - Run with pytest: `pytest`
