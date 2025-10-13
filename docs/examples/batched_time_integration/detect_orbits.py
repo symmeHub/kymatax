@@ -1,5 +1,6 @@
 import polars as pl
-from kinamax.core import H46Problem, detect_orbits
+from kinamax.core import detect_orbits
+from kinamax.problems import H46Problem
 
 working_dir = "outputs"
 simulations = pl.read_parquet(f"{working_dir}/simulations.parquet")
@@ -14,5 +15,8 @@ attractors, sim_orbit = detect_orbits(
     attractor_state_vec_labels=attractor_state_vec_labels,
     state_vec_labels=state_vec_labels,
 )
+
+# Set Eh to zero for orbits since it's not relevant for the attractor detection.
+attractors = attractors.with_columns(Eh = attractors["Eh"] * 0.)
 attractors.write_parquet(f"{working_dir}/orbits.parquet")
 sim_orbit.write_parquet(f"{working_dir}/sim_orbit.parquet")

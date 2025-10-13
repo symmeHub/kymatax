@@ -58,56 +58,7 @@ class Container:
         return df
 
 
-@register_dataclass
-@dataclass
-class H46Problem(Container):
-    """
-    H46 Problem
-    """
 
-    xw: jax.Array = 0.5e-3
-    fd: jax.Array = 50.0
-    w0: jax.Array = 121.0
-    Q: jax.Array = 87.0
-    Ad: jax.Array = 2.5
-    state_vector_labels: ClassVar = ["x", "dotx"]
-    params_labels: ClassVar = ["xw", "w0", "Ad", "Q", "fd"]
-    # label_col: ClassVar = "problem_id"
-
-    def state_weights(self):
-        """
-        Returns the state weights for the system.
-        Returns:
-            jnp.ndarray: State weights.
-        """
-        xw = self.xw
-        w0 = self.w0
-        return jnp.array([1.0 / xw, 1.0 / (w0 * xw)])
-
-    def rhs(self, t, X, args=None):
-        """
-        Right-hand side of the ODE.
-        Args:
-            t (float): Time.
-            X (jnp.ndarray): State vector.
-            args (tuple, optional): Additional arguments. Defaults to None.
-        Returns:
-            jnp.ndarray: Derivative of the state vector.
-        """
-        xw = self.xw
-        w0 = self.w0
-        Q = self.Q
-        fd = self.fd
-        Ad = self.Ad
-        x, dotx = X
-        wd = 2.0 * jnp.pi * fd
-        ddotx = (
-            -(jnp.pow(w0, 2)) / 2.0 * (jnp.pow(x / xw, 2) - 1.0) * x
-            - w0 / Q * dotx
-            + Ad * jnp.sin(wd * t)
-        )
-        Xout = jnp.array([dotx, ddotx])
-        return Xout
 
 
 @register_dataclass
@@ -261,7 +212,7 @@ class AttractorFinder(NamedTuple):
         """
         Find orbits for the given problem.
         Args:
-            problem (H46Problem): The problem instance.
+            problem: The problem instance.
             term (ODETerm): The ODE term.
             solver (Tsit5): The solver.
             controller (PIDController): The controller.
@@ -516,6 +467,51 @@ class AttractorFinder(NamedTuple):
         t2 = t1 + (t1 - t0)
         return X2, res, t1, t2
 
+
+def post_process_attractor_finder_results(
+    problem_class,
+    problems,
+    finder_configs,
+    init_conditions,
+    solutions,
+    target_subharmonics,
+    solution_state_labels,
+):
+    """Flatten batched results and balance rows per subharmonic."""
+
+    state_vector_labels = problem_class.state_vector_labels
+    state_space_dim = len(state_vector_labels)
+    flattened_init = np.array(init_conditions).reshape(-1, state_space_dim)
+    max_attractors = target_subharmonics.max()
+
+    df_init_conditions = pl.DataFrame(
+        { k: flattened_init[:, i].repeat(max_attractors)
+           for i, k in enumerate(state_vector_labels)
+        }
+    )
+
+    raw_data = pl.concat(
+        [
+            problems.as_polars(repeat=max_attractors),
+            finder_configs.as_polars(repeat=max_attractors),
+            df_init_conditions,
+            solutions.as_polars(state_vector_labels=solution_state_labels),
+        ],
+        how="horizontal",
+    )
+
+    balanced = []
+    unique_subharmonics = raw_data["detected_subharmonic"].unique()
+    max_detected = unique_subharmonics.max()
+    for sh in unique_subharmonics:
+        group = raw_data.filter(pl.col("detected_subharmonic") == sh)
+        limit = sh if sh != 0 else max_detected
+        balanced.append(group.group_by("sim_label").head(limit))
+
+    return (
+        pl.concat(balanced, how="vertical")
+        .sort(["sim_label", "attractor_label"])
+    )
 
 def cluster_points(points, weights, distance_threshold=0.01, method="dbscan"):
     """
