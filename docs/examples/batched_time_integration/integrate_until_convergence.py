@@ -115,7 +115,7 @@ def main():
        companion tutorial in the documentation can visualise the attractors.
     """
     # Frequency sweep (Hz): here just a single point at 50 Hz
-    fd = jnp.linspace(15.0, 50.0, 36)
+    fd = jnp.linspace(10.0, 60.0, 51)
     finder_config = AttractorFinderConfig(
         convergence_tol=1.0e-10,
         target_frequency=fd,

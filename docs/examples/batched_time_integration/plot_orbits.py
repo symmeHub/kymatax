@@ -50,7 +50,7 @@ def _(orbits, pl):
     orbit_energy = orbits["orbit_label", "Eh"].group_by("orbit_label").sum()
     orbit_energy
     orbit_data = unique_orbits.join(orbit_energy, on="orbit_label", how="inner")
-    orbit_data = orbit_data.with_columns((pl.col("Eh") / pl.col("fd") / pl.col("detected_subharmonic")).alias("Ph"))
+    orbit_data = orbit_data.with_columns((pl.col("Eh") * pl.col("fd") / pl.col("detected_subharmonic")).alias("Ph"))
     orbit_data
     return (orbit_data,)
 
@@ -80,7 +80,7 @@ def _(alt, orbit_data, pl):
 
     chart3 = (
         alt.Chart(
-            orbit_data.with_columns((pl.col("Ph") * 1000).alias("Ph_scaled"))
+            orbit_data.with_columns((pl.col("Ph") * 1000.).alias("Ph_scaled"))
         )
         .mark_circle(size=80)
         .encode(
@@ -94,10 +94,10 @@ def _(alt, orbit_data, pl):
                     range=list(custom_colors.values()),
                 ),
             ),
-            shape="orbit_label:N",
+            shape="detected_subharmonic:N",
             tooltip=["orbit_label", "fd", "Ph", "detected_subharmonic"],
         )
-        .properties(width=500, height=300, title="Ph vs fd")
+        .properties(title="Mechanical Dissipated Power $P_h$")
     ).interactive()
 
     chart3.show()
