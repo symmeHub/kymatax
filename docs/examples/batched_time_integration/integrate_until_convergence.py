@@ -115,7 +115,7 @@ def main():
        companion tutorial in the documentation can visualise the attractors.
     """
     # Frequency sweep (Hz): here just a single point at 50 Hz
-    fd = jnp.linspace(50.0, 51.0, 1)
+    fd = jnp.linspace(15.0, 50.0, 36)
     finder_config = AttractorFinderConfig(
         convergence_tol=1.0e-10,
         target_frequency=fd,
@@ -126,9 +126,9 @@ def main():
 
     solver = Tsit5()
     controller = PIDController(rtol=1e-8, atol=1e-9)
-    target_subharmonics = np.array([1, 2, 3, 4, 5], dtype=int)
+    target_subharmonics = np.array([1, 2, 3, 5], dtype=int)
     attractor_finder = AttractorFinder(
-        residuals_per_period=10,
+        residuals_per_period=20,
         targetted_subharmonics=target_subharmonics,
         max_periods=5000,
         controller=controller,
@@ -137,7 +137,7 @@ def main():
 
     problem = H46Problem(fd=fd, Ad=2.5)
     key = jax.random.PRNGKey(758493)
-    Nstart = 50
+    Nstart = 20
     init_conditions = (
         (jax.random.uniform(key, shape=(Nstart, 3)) - 0.5)
         * 2.0

@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from diffrax import ODETerm, SaveAt, diffeqsolve, Tsit5, PIDController
 from typing import NamedTuple
 import numpy as np
+from pathlib import Path
 
 
 working_dir = "outputs"
@@ -102,4 +103,25 @@ class OrbitCalculator(NamedTuple):
 calculator = OrbitCalculator()
 calculator_fn = jax.jit(jax.vmap(calculator.calculate_orbit))
 # orbit = calculator_fn(problem, Xa=Xa[aid], init_time=init_times[aid], target_frequency=target_frequencies[aid], init_time_step=init_time_steps[aid])
-orbits = calculator_fn(problems, Xa=Xa, init_time=init_times, target_frequency=target_frequencies, init_time_step=init_time_steps)
+calculated_orbits = np.array(calculator_fn(problems, Xa=Xa, init_time=init_times, target_frequency=target_frequencies, init_time_step=init_time_steps))
+
+orbits_labels = np.asarray(orbits["orbit_label"])
+attractors_labels = np.array(orbits["attractor_label"])
+orbits_dir = "outputs/orbits_from_attractors"
+orbits_dir = Path(orbits_dir)
+orbits_dir.mkdir(parents=True, exist_ok=True)
+
+orbits_from_attractors = {}
+for i in range(len(calculated_orbits)):
+    orbit_label = orbits_labels[i]
+    attractor_label = attractors_labels[i]
+    orbit_data = calculated_orbits[i]
+    orbit_df = pl.from_numpy(orbit_data, schema=state_vec_labels)
+    orbits_from_attractors[(orbit_label, attractor_label)] = orbit_df
+    orbit_df.write_parquet(orbits_dir / f"orbit_{orbit_label}_attractor_{attractor_label}.parquet")
+
+dicts = [{"orbit_label": k[0], "attractor_label": k[1], "Eh": v.item(-1, "Eh")} for (k, v) in orbits_from_attractors.items()]
+
+energy_per_period = pl.from_dicts(dicts)
+orbits = orbits.drop("Eh").join(energy_per_period, on=["orbit_label", "attractor_label"], how="right")
+orbits.write_parquet(f"{working_dir}/orbits.parquet")
